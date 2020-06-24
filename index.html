@@ -1,0 +1,320 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN""http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8"/>
+  <script src="https://cdn.bootcdn.net/ajax/libs/crypto-js/4.0.0/crypto-js.js"></script>
+  <script>
+    CryptoJS.enc.u8array = {
+
+      stringify: function (wordArray) {
+        var words = wordArray.words;
+        var sigBytes = wordArray.sigBytes;
+        var u8 = new Uint8Array(sigBytes);
+        for (var i = 0; i < sigBytes; i++) {
+          var byte = (words[i >>> 2] >>> (24 - (i % 4) * 8)) & 0xff;
+          u8[i] = byte;
+        }
+
+        return u8;
+      },
+
+      parse: function (u8arr) {
+        var len = u8arr.length;
+        var words = [];
+        for (var i = 0; i < len; i++) {
+          words[i >>> 2] |= (u8arr[i] & 0xff) << (24 - (i % 4) * 8);
+        }
+
+        return CryptoJS.lib.WordArray.create(words, len);
+      }
+    };
+
+  </script>
+  <script>
+
+    //arraybuffer转string
+    function arrayBufferToString(buf) {
+      return String.fromCharCode.apply(null, new Uint8Array(buf));
+    }
+
+    function b64ToUint6(nChr) {
+
+      return nChr > 64 && nChr < 91 ?
+        nChr - 65
+        : nChr > 96 && nChr < 123 ?
+          nChr - 71
+          : nChr > 47 && nChr < 58 ?
+            nChr + 4
+            : nChr === 43 ?
+              62
+              : nChr === 47 ?
+                63
+                :
+                0;
+
+    }
+    function uint6ToB64(nUint6) {
+
+      return nUint6 < 26 ?
+        nUint6 + 65
+        : nUint6 < 52 ?
+          nUint6 + 71
+          : nUint6 < 62 ?
+            nUint6 - 4
+            : nUint6 === 62 ?
+              43
+              : nUint6 === 63 ?
+                47
+                :
+                65;
+
+    }
+    //利用base64对数组编码
+    function base64EncArr(aBytes) {
+
+      var eqLen = (3 - (aBytes.length % 3)) % 3, sB64Enc = "";
+
+      for (var nMod3, nLen = aBytes.length, nUint24 = 0, nIdx = 0; nIdx < nLen; nIdx++) {
+        nMod3 = nIdx % 3;
+        /* Uncomment the following line in order to split the output in lines 76-character long: */
+        /*
+        if (nIdx > 0 && (nIdx * 4 / 3) % 76 === 0) { sB64Enc += "\r\n"; }
+        */
+        nUint24 |= aBytes[nIdx] << (16 >>> nMod3 & 24);
+        if (nMod3 === 2 || aBytes.length - nIdx === 1) {
+          sB64Enc += String.fromCharCode(uint6ToB64(nUint24 >>> 18 & 63), uint6ToB64(nUint24 >>> 12 & 63), uint6ToB64(nUint24 >>> 6 & 63), uint6ToB64(nUint24 & 63));
+          nUint24 = 0;
+        }
+      }
+
+      return eqLen === 0 ?
+        sB64Enc
+        :
+        sB64Enc.substring(0, sB64Enc.length - eqLen) + (eqLen === 1 ? "=" : "==");
+
+    }
+
+    //将arraybuffer数组转为字符串
+    function UTF8ArrToStr(aBytes) {
+
+      var sView = "";
+
+      for (var nPart, nLen = aBytes.length, nIdx = 0; nIdx < nLen; nIdx++) {
+        nPart = aBytes[nIdx];
+        sView += String.fromCharCode(
+          nPart > 251 && nPart < 254 && nIdx + 5 < nLen ? /* six bytes */
+            /* (nPart - 252 << 30) may be not so safe in ECMAScript! So...: */
+            (nPart - 252) * 1073741824 + (aBytes[++nIdx] - 128 << 24) + (aBytes[++nIdx] - 128 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 247 && nPart < 252 && nIdx + 4 < nLen ? /* five bytes */
+            (nPart - 248 << 24) + (aBytes[++nIdx] - 128 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+            : nPart > 239 && nPart < 248 && nIdx + 3 < nLen ? /* four bytes */
+              (nPart - 240 << 18) + (aBytes[++nIdx] - 128 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+              : nPart > 223 && nPart < 240 && nIdx + 2 < nLen ? /* three bytes */
+                (nPart - 224 << 12) + (aBytes[++nIdx] - 128 << 6) + aBytes[++nIdx] - 128
+                : nPart > 191 && nPart < 224 && nIdx + 1 < nLen ? /* two bytes */
+                  (nPart - 192 << 6) + aBytes[++nIdx] - 128
+                  : /* nPart < 127 ? */ /* one byte */
+                  nPart
+        );
+      }
+
+      return sView;
+
+    }
+
+    //将字符串转为arraybuffer
+    function strToUTF8Arr(sDOMStr) {
+
+      var aBytes, nChr, nStrLen = sDOMStr.length, nArrLen = 0;
+
+      /* mapping... */
+
+      for (var nMapIdx = 0; nMapIdx < nStrLen; nMapIdx++) {
+        nChr = sDOMStr.charCodeAt(nMapIdx);
+        nArrLen += nChr < 0x80 ? 1 : nChr < 0x800 ? 2 : nChr < 0x10000 ? 3 : nChr < 0x200000 ? 4 : nChr < 0x4000000 ? 5 : 6;
+      }
+
+      aBytes = new Uint8Array(nArrLen);
+
+      /* transcription... */
+
+      for (var nIdx = 0, nChrIdx = 0; nIdx < nArrLen; nChrIdx++) {
+        nChr = sDOMStr.charCodeAt(nChrIdx);
+        if (nChr < 128) {
+          /* one byte */
+          aBytes[nIdx++] = nChr;
+        } else if (nChr < 0x800) {
+          /* two bytes */
+          aBytes[nIdx++] = 192 + (nChr >>> 6);
+          aBytes[nIdx++] = 128 + (nChr & 63);
+        } else if (nChr < 0x10000) {
+          /* three bytes */
+          aBytes[nIdx++] = 224 + (nChr >>> 12);
+          aBytes[nIdx++] = 128 + (nChr >>> 6 & 63);
+          aBytes[nIdx++] = 128 + (nChr & 63);
+        } else if (nChr < 0x200000) {
+          /* four bytes */
+          aBytes[nIdx++] = 240 + (nChr >>> 18);
+          aBytes[nIdx++] = 128 + (nChr >>> 12 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 6 & 63);
+          aBytes[nIdx++] = 128 + (nChr & 63);
+        } else if (nChr < 0x4000000) {
+          /* five bytes */
+          aBytes[nIdx++] = 248 + (nChr >>> 24);
+          aBytes[nIdx++] = 128 + (nChr >>> 18 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 12 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 6 & 63);
+          aBytes[nIdx++] = 128 + (nChr & 63);
+        } else /* if (nChr <= 0x7fffffff) */ {
+          /* six bytes */
+          aBytes[nIdx++] = 252 + (nChr >>> 30);
+          aBytes[nIdx++] = 128 + (nChr >>> 24 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 18 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 12 & 63);
+          aBytes[nIdx++] = 128 + (nChr >>> 6 & 63);
+          aBytes[nIdx++] = 128 + (nChr & 63);
+        }
+      }
+
+      return aBytes;
+
+    }
+
+
+    //从webcrypt加密到cryptojs解密过程
+    function aesEncrypt(data, key, iv) {
+      //获取协议
+      var protocolStr = document.location.protocol;
+      const aesEncryptByWebcrypt = async (data, key, iv) => {
+
+        //将数组key/向量转为arraybuffer
+        key_buffer = new Uint8Array(key);
+        iv_buffer = new Uint8Array(iv);
+
+        //将被加密数据转为arraybuffer
+        const message = strToUTF8Arr(data)
+        const algorithm = {
+          name: 'AES-CTR',
+          counter: iv_buffer,
+          length: 64
+        };
+
+        //生成加密key
+        const key_web = await window.crypto.subtle.importKey(
+          "raw",
+          key_buffer,
+          "AES-CTR",
+          true,
+          ["encrypt", "decrypt"]
+        );
+
+        //加密
+        const messageEncrypted = await window.crypto.subtle.encrypt(
+          algorithm,
+          key_web,
+          message,
+        );
+
+        //生成key arraybuffer 用于CryptoJS解密
+        var key_buffer_cryptojs = new Uint8Array(key);
+        //生成iv arraybuffer 用于CryptoJS解密
+        var iv_buffer_cryptojs = new Uint8Array(iv);
+
+        //将key和iv转换成WordArray
+        key_word_cryptojs = CryptoJS.enc.u8array.parse(key_buffer_cryptojs);
+        iv_word_cryptojs = CryptoJS.enc.u8array.parse(iv_buffer_cryptojs);
+
+        //将数据base64传入CryptoJS
+        var dcBase64String = base64EncArr(new Uint8Array(messageEncrypted))
+
+        var decrypted = CryptoJS.AES.decrypt(dcBase64String, key_word_cryptojs, {
+          iv: iv_word_cryptojs,
+          mode: CryptoJS.mode.CTR,
+          padding: CryptoJS.pad.NoPadding
+        });
+
+        console.log('decrypted', decrypted)
+        var bv = CryptoJS.enc.u8array.stringify(decrypted);
+        console.log('解密结果', UTF8ArrToStr(bv))
+      }
+      return new Promise((resolve, reject) => {
+        aesEncryptByWebcrypt(data, key, iv).then((result) => {
+          return resolve(result)
+        })
+      })
+
+    }
+
+    //从cryptojs加密到webcrypt到解密过程
+    function aesDecrypt(data, key, iv) {
+      //获取协议
+      var protocolStr = document.location.protocol;
+      const aesDecryptByWebcrypt = async (data, key, iv) => {
+        var key_word_cryptojs = CryptoJS.enc.u8array.parse(key);
+        var iv_word_cryptojs = CryptoJS.enc.u8array.parse(iv);
+
+        //将数据base64传入CryptoJS
+
+        var dcBase64String = base64EncArr(strToUTF8Arr(data))
+
+        var decrypted = CryptoJS.AES.encrypt(data, key_word_cryptojs, {
+          iv: iv_word_cryptojs,
+          mode: CryptoJS.mode.CTR,
+          padding: CryptoJS.pad.NoPadding
+        });
+
+        var bv = CryptoJS.enc.u8array.stringify(decrypted.ciphertext);
+
+
+        //将数组key/向量转为arraybuffer
+        key_buffer = new Uint8Array(key);
+        iv_buffer = new Uint8Array(iv);
+
+        //将被加密数据转为arraybuffer
+        const message = bv
+        const algorithm = {
+          name: 'AES-CTR',
+          counter: iv_buffer,
+          length: 64
+        };
+
+        //生成加密key
+        const key_web = await window.crypto.subtle.importKey(
+          "raw",
+          key_buffer,
+          "AES-CTR",
+          true,
+          ["encrypt", "decrypt"]
+        );
+
+        //加密
+        const messageEncrypted = await window.crypto.subtle.decrypt(
+          algorithm,
+          key_web,
+          message,
+        );
+        console.log(arrayBufferToString(messageEncrypted))
+      }
+
+      return new Promise((resolve, reject) => {
+        aesDecryptByWebcrypt(data, key, iv).then((result) => {
+          return resolve(result)
+        })
+      })
+    }
+
+    //测试
+    // 服务端提供的key
+    var akey = [38, 175, 226, 26, 12, 22, 115, 84, 19, 253, 104, 221, 143, 160, 183, 193, 87, 166, 144, 255, 205, 179, 84, 97, 16, 7, 213, 126, 219, 30, 76, 233]
+    // 服务端提供的16位iv
+    var aiv = [21, 76, 211, 85, 254, 161, 255, 1, 0, 52, 171, 34, 8, 79, 19, 7]
+    aesDecrypt('hell677777o', akey, aiv)
+    aesDecrypt('iuuuu', akey, aiv)
+  </script>
+  <title>AES加密解密</title>
+</head>
+<body>
+
+</body>
+</html>
+
